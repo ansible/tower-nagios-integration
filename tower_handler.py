@@ -56,7 +56,8 @@ parser.add_argument("--extra_vars", help="Extra variables (JSON)", required=Fals
 parser.add_argument("--limit", help="Limit run to these hosts (group name, or comma separated hosts)", required=False)
 parser.add_argument("--state", help="Nagios check state", required=False)
 parser.add_argument("--attempt", help="Nagios check attempt", required=False, type=int)
-parser.add_argument("--downtime", help="Nagios downtime check", required=False, type=int)
+parser.add_argument("--downtime", help="Nagios service downtime check", required=False, type=int)
+parser.add_argument("--host_downtime", help="Nagios host downtime check", required=False, type=int)
 parser.add_argument("--service", help="Nagios alerting service", required=False)
 parser.add_argument("--hostname", help="Nagios alerting hostname", required=False)
 parser.add_argument("--warning", help="Trigger on WARNING (otherwise just CRITICAL and UNKNOWN)", required=False, action='store_true')
@@ -78,11 +79,12 @@ def info(msg):
 
 def log_run(msg):
     # kind of NRPE-style logging
-    logger('job_number=%s job_status="%s" service="%s" hostname="%s" service_state="%s" service_attempt=%s service_downtime=%s template="%s" inventory="%s" extra_vars="%s" limit="%s" handler_message="%s"' %
-            (job_number, job_status, args.service, args.hostname, args.state, args.attempt, args.downtime, args.template, args.inventory, args.extra_vars, args.limit, msg))
+    logger('job_number=%s job_status="%s" service="%s" hostname="%s" service_state="%s" service_attempt=%s service_downtime=%s host_downtime=%s template="%s" inventory="%s" extra_vars="%s" limit="%s" handler_message="%s"' %
+            (job_number, job_status, args.service, args.hostname, args.state, args.attempt, args.downtime, args.host_downtime, args.template, args.inventory, args.extra_vars, args.limit, msg))
 
 if args.state == "OK" or \
   args.downtime > 0 or \
+  args.host_downtime > 0 or \
   args.attempt <= 1 or \
   (args.state == "WARNING" and args.warning == False):
   # don't run handler if either one is true:
