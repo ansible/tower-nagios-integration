@@ -27,14 +27,12 @@
 # Web site: https://github.com/ansible/tower-nagios-integration
 # Author: https://github.com/badnetmask
 
+import os
 import sys
 import json
 import syslog
 import argparse
-
-from tower_cli import exceptions
-from tower_cli.api import client
-from tower_cli.resources import job
+import requests
 
 # things we pass to the job POST call
 job_data = {}
@@ -64,8 +62,41 @@ parser.add_argument("--warning", help="Trigger on WARNING (otherwise just CRITIC
 
 args = parser.parse_args()
 
-# proof that it works
-#print client.get('/config/').json()['version']
+tower_host = os.getenv('TOWER_HOST')
+tower_username = os.getenv('TOWER_USERNAME')
+tower_password = os.getenv('TOWER_PASSWORD')
+
+if not (tower_host and tower_username and tower_password):
+  print("Error: missing host or authentication information.")
+  sys.exit(1)
+
+awxsession = requests.Session()
+# initiate the conversation with Tower to get a token
+csrftoken = awxsession.get(tower_host + '/api/').cookies['csrftoken']
+awxsession_data = {
+  'username': tower_username,
+  'password': tower_password,
+  'next': '/api/'
+}
+awxsession_headers = {
+  'Content-Type': 'application/x-www-form-urlencoded',
+  'Referer': tower_host + '/api/login/',
+  'X-CSRFToken': csrftoken,
+}
+# attempt to login to Tower
+r = awxsession.post(tower_host + '/api/login/',
+  headers=awxsession_headers, data=awxsession_data)
+if not r.status_code == 200:
+  print('Error authenticating against the Ansible Tower host.')
+  sys.exit(1)
+
+# from now on, we only deal with json data
+# also, the token cookie was reset
+awxsession_headers = {
+  'Content-Type': 'application/json',
+  'Referer': tower_host + '/api/login/',
+  'X-CSRFToken': awxsession.cookies['csrftoken'],
+}
 
 def logger(msg):
     syslog.syslog(msg)
@@ -81,6 +112,16 @@ def log_run(msg):
     # kind of NRPE-style logging
     logger('job_number=%s job_status="%s" service="%s" hostname="%s" service_state="%s" service_attempt=%s service_downtime=%s host_downtime=%s template="%s" inventory="%s" extra_vars="%s" limit="%s" handler_message="%s"' %
             (job_number, job_status, args.service, args.hostname, args.state, args.attempt, args.downtime, args.host_downtime, args.template, args.inventory, args.extra_vars, args.limit, msg))
+
+def awxget(endpoint):
+  return awxsession.get(tower_host + '/api/v2' + endpoint, headers=awxsession_headers)
+
+def awxpost(endpoint, data):
+  return awxsession.post(tower_host + '/api/v2' + endpoint, headers=awxsession_headers, data=json.dumps(data))
+
+# proof that it works
+# print(awxget('/config/').json()['version'])
+# sys.exit(0)
 
 if args.state == "OK" or \
   args.downtime > 0 or \
@@ -98,7 +139,7 @@ if args.state == "OK" or \
 if not args.template.isdigit():
   try:
     # when --template is a name, we need the number
-    find_template = client.get('/job_templates/?name=%s' % args.template)
+    find_template = awxget('/job_templates/?name=%s' % args.template)
     template_number = find_template.json()['results'][0]['id']
   except exceptions.AuthError:
     log_run("Error authenticating to tower. Check user/password.")
@@ -111,7 +152,7 @@ else:
   template_number = args.template
 
 try:
-  job_check = client.get('/job_templates/%s' % template_number)
+  job_check = awxget('/job_templates/%s' % template_number)
   #print json.dumps(job_check.json(), indent=2)
 except exceptions.AuthError:
   log_run("Error authenticating to tower. Check user/password.")
@@ -127,7 +168,7 @@ if(job_check.json()['ask_inventory_on_launch'] and not args.inventory):
 if not args.inventory.isdigit():
   try:
     # when --inventory is a name, we need a number
-    find_inventory = client.get('/inventories/?name=%s' % args.inventory)
+    find_inventory = awxget('/inventories/?name=%s' % args.inventory)
     inventory_number = find_inventory.json()['results'][0]['id']
   except exceptions.NotFound:
     log_run("ERROR: inventory not found")
@@ -137,7 +178,7 @@ else:
   inventory_number = args.inventory
 
 try:
-  inventory_check = client.get('/inventories/%s' % inventory_number)
+  inventory_check = awxget('/inventories/%s' % inventory_number)
   job_data['inventory'] = inventory_number
 except exceptions.NotFound:
   log_run("ERROR: inventory not found")
@@ -167,7 +208,7 @@ else:
   job_data['limit'] = args.limit
 
 try:
-  job_started = client.post('/job_templates/%s/launch/' % template_number, data=job_data)
+  job_started = awxpost('/job_templates/%s/launch/' % template_number, data=job_data)
   #print json.dumps(job_started.json(), indent=2)
   if(job_started.json()['id'] and job_started.json()['job']):
     job_number = job_started.json()['id']
@@ -178,6 +219,6 @@ try:
     job_status = "FAILED"
     log_run("ERROR: API call to start job failed")
     error("Could not start tower job: %s" % job_started['result_stdout'])
-except exceptions.BadRequest:
-  log_run("ERROR: bad request on API call -- URI[/job_templates/%s/launch/] DATA[%s]" % (template_number, job_data))
-  error("There was a bad request on the API call -- URI[/job_templates/%s/launch/] DATA[%s]" % (template_number, job_data))
+except:
+  log_run("ERROR: bad request on API call -- URI[/job_templates/%s/launch/] DATA[%s] RESPONSE[%s]" % (template_number, job_data, job_started.text))
+  error("There was a bad request on the API call -- URI[/job_templates/%s/launch/] DATA[%s] RESPONSE[%s]" % (template_number, job_data, job_started.text))
